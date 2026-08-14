@@ -8,12 +8,47 @@ document the app reads, so the task appears on your next 30-second sync.
 
 ## How it behaves
 
-- **Subject** becomes the task title.
-- **Body** (plain text, or HTML stripped to text) becomes the notes.
-- A date in the subject or body sets the due date: `2026-08-20`, `20/08/2026`,
-  `20/08`, `today`, or `tomorrow`. No date found = task with no date.
-- Subject containing "visit" is typed as a School Visit, otherwise a Meeting.
-  Everything else (school, contact, times) is left blank for you to fill in the app.
+**Quick capture (no rules):** the **subject** becomes the task title, the **body**
+becomes the notes, and a date in the subject sets the due date. Signatures and
+confidentiality footers are trimmed off automatically. That is all you need for a
+fast task.
+
+**Structured labels (optional):** to fill specific fields, put `Label: value`
+lines anywhere in the body. Recognised labels:
+
+| Label | Fills | Examples |
+|-------|-------|----------|
+| `Date:` | Due date | `20 Aug`, `2026-08-20`, `20/08`, `Monday`, `today`, `tomorrow` |
+| `Time:` | Start/end time | `9:30-10:30`, `9am-10:30am`, `2pm` |
+| `Type:` | Task type | `School Visit`, `Meeting`, `CAT` |
+| `School:` | School name | `Gilmerton Primary` |
+| `Contact:` (or `With:`) | Staff contact | `A. Murray` |
+| `LC:` (or `Community:`) | Learning community | `Gilmerton` |
+| `Support:` | Support type | `In Person` |
+| `Follow-up:` | Follow-up items | `bring plan; email HT` (`;` = separate items) |
+| `Notes:` | Notes | free text |
+
+Notes:
+- Labels are optional and case-insensitive; use as few or as many as you like.
+- An explicit `Date:` beats a date in the subject.
+- Any line **without** a recognised label just becomes part of the notes, so you
+  can mix labels and prose freely.
+- No labels at all = the quick-capture behaviour above.
+- Dates are read only from the subject and the `Date:` label - never from loose
+  body text - so numbers in a signature can't be mistaken for a due date.
+
+**Example**
+
+```
+To:      task@morren.uk        (your real routed address)
+Subject: Gilmerton visit
+
+Date: 20 Aug
+Time: 9:30-10:30
+Contact: A. Murray
+Follow-up: bring phonics plan; email HT
+Anything here with no label goes into the notes.
+```
 
 ## Deploy (all in the Cloudflare dashboard, no local tooling)
 

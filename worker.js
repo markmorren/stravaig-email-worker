@@ -69,33 +69,118 @@ export default {
 // Mirrors the app's taskFromEvent shape so an emailed task renders identically.
 function taskFromEmail(subject, body) {
   const title = subject || "(no subject)";
-  // Date from the subject ONLY. Scanning the body caught number patterns in
-  // signatures (e.g. "Business Centre 1/2") as false dates.
-  const dueDate = parseDate(subject);
-  const type = /\bvisit\b/i.test(title) ? "School Visit" : "Meeting";
-  let notesBody = trimSignature(body);
-  // If the body just echoes the subject, don't repeat it in the notes.
-  if (notesBody.trim().toLowerCase() === title.trim().toLowerCase()) notesBody = "";
+  const f = parseFields(trimSignature(body));
+
+  // Explicit "Date:" label wins; otherwise fall back to a date in the subject.
+  // Never scan the free body for dates - signatures ("Business Centre 1/2")
+  // produce false positives.
+  const dueDate = parseDate(f.date || "") || parseDate(subject);
+  const { start, end } = parseTimeRange(f.time || "");
+  const type = f.type || (/\bvisit\b/i.test(title) ? "School Visit" : "Meeting");
+
+  // Notes = an explicit "Notes:" label if given, else the leftover unlabelled
+  // lines. Drop it if it just repeats the subject.
+  let notesBody = (f.notes || f._free || "").trim();
+  if (notesBody.toLowerCase() === title.trim().toLowerCase()) notesBody = "";
 
   return {
     id: "id-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
     icsUid: "",
     taskType: type,
-    learningCommunity: "",
-    schoolName: "",
-    staffContact: "",
-    supportType: "",
+    learningCommunity: f.lc || "",
+    schoolName: f.school || "",
+    staffContact: f.contact || "",
+    supportType: f.support || "",
     dueDate: dueDate,
-    startTime: "",
-    endTime: "",
+    startTime: start,
+    endTime: end,
     notes: title + (notesBody ? "\n\n" + notesBody : "") + " (from email)",
-    followUpItems: "",
+    followUpItems: f.followup || "",
     followUpChecked: [],
     completed: false,
     status: "Not started",
     completedDate: null,
     updatedAt: new Date().toISOString(),
   };
+}
+
+// Read optional "Label: value" lines out of the body and map them to task
+// fields. Unknown labels and unlabelled lines are kept as free text (_free).
+// Only these labels are recognised - anything else stays in the notes.
+const FIELD_LABELS = {
+  date: "date",
+  due: "date",
+  time: "time",
+  when: "time",
+  type: "type",
+  contact: "contact",
+  with: "contact",
+  staff: "contact",
+  school: "school",
+  lc: "lc",
+  community: "lc",
+  "learning community": "lc",
+  support: "support",
+  "follow-up": "followup",
+  followup: "followup",
+  "follow up": "followup",
+  todo: "followup",
+  action: "followup",
+  actions: "followup",
+  notes: "notes",
+  note: "notes",
+};
+
+function parseFields(body) {
+  const fields = {};
+  const free = [];
+  for (const line of (body || "").split("\n")) {
+    const m = line.match(/^\s*([A-Za-z][A-Za-z \-]{0,20}?)\s*:\s*(.+?)\s*$/);
+    const key = m ? m[1].toLowerCase().trim() : null;
+    if (m && FIELD_LABELS[key]) {
+      const field = FIELD_LABELS[key];
+      const val = m[2].trim();
+      if (field === "followup") {
+        // allow "a; b; c" on one line, or several follow-up lines
+        const items = val.split(/\s*;\s*/).filter(Boolean).join("\n");
+        fields.followup = fields.followup ? fields.followup + "\n" + items : items;
+      } else if (field === "notes") {
+        fields.notes = fields.notes ? fields.notes + "\n" + val : val;
+      } else {
+        fields[field] = val; // last one wins for single-value fields
+      }
+    } else {
+      free.push(line);
+    }
+  }
+  fields._free = free.join("\n").trim();
+  return fields;
+}
+
+// Parse a time or time range -> { start, end } as "HH:MM" (24h). Handles
+// "9:30-10:30", "09:00 to 10:00", "9am-10:30am", "2pm". A bare number with no
+// colon or am/pm is ignored, so dates like "20 Aug" are never read as a time.
+function parseTimeRange(text) {
+  if (!text) return { start: "", end: "" };
+  const toks = [...text.matchAll(/(\d{1,2})(?::(\d{2}))?\s*(am|pm)?/gi)].filter(
+    (m) => m[2] !== undefined || m[3] !== undefined
+  );
+  if (!toks.length) return { start: "", end: "" };
+  const start = to24(toks[0]);
+  // if the start had no am/pm but the end did (e.g. "9-10am"), share it
+  let s = start;
+  if (toks[1] && !toks[0][3] && toks[1][3]) s = to24([null, toks[0][1], toks[0][2], toks[1][3]]);
+  const end = toks[1] ? to24(toks[1]) : "";
+  return { start: s, end };
+}
+
+function to24(m) {
+  let h = parseInt(m[1], 10);
+  const min = m[2] ? parseInt(m[2], 10) : 0;
+  const ap = m[3] ? m[3].toLowerCase() : "";
+  if (ap === "pm" && h < 12) h += 12;
+  if (ap === "am" && h === 12) h = 0;
+  return String(h).padStart(2, "0") + ":" + String(min).padStart(2, "0");
 }
 
 // Cut an email body at the start of its signature / footer, so the task notes
@@ -119,29 +204,68 @@ function trimSignature(text) {
   return text.slice(0, cut).trim();
 }
 
-// Find a date in text -> "YYYY-MM-DD", or "" if none.
-// Understands: 2026-08-20, 20/08/2026, 20/08, today, tomorrow.
+// Find a date in text -> "YYYY-MM-DD", or "" if none. Understands:
+// 2026-08-20, 20/08/2026, 20/08, "20 Aug[ust][ 2026]", "Aug 20[, 2026]",
+// today, tomorrow, and weekday names (-> next occurrence).
+const MONTHS = { jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12 };
+const WEEKDAYS = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+
 function parseDate(text) {
   if (!text) return "";
   const t = text.toLowerCase();
+  let m;
 
-  const iso = t.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
-  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+  // ISO
+  m = t.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
 
-  const uk = t.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
-  if (uk) {
-    const d = uk[1].padStart(2, "0");
-    const m = uk[2].padStart(2, "0");
-    let y = uk[3] || String(new Date().getFullYear());
-    if (y.length === 2) y = "20" + y;
-    return `${y}-${m}-${d}`;
-  }
+  // "20 Aug 2026" / "20 August" / "20 Aug"
+  m = t.match(/\b(\d{1,2})\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?(?:\s+(\d{4}))?\b/);
+  if (m) return ymd(m[3], MONTHS[m[2]], m[1]);
+
+  // "Aug 20 2026" / "August 20"
+  m = t.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:,?\s+(\d{4}))?\b/);
+  if (m) return ymd(m[3], MONTHS[m[1]], m[2]);
+
+  // dd/mm(/yyyy)
+  m = t.match(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/);
+  if (m) return ymd(m[3], m[2], m[1]);
 
   const now = new Date();
   if (/\btoday\b/.test(t)) return isoDay(now);
   if (/\btomorrow\b/.test(t)) return isoDay(new Date(now.getTime() + 86400000));
 
+  // weekday name -> next occurrence (never today)
+  m = t.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|wed|thu|fri|sat|sun)\b/);
+  if (m) {
+    const target = WEEKDAYS[m[1].slice(0, 3)];
+    let add = (target - now.getDay() + 7) % 7;
+    if (add === 0) add = 7;
+    return isoDay(new Date(now.getTime() + add * 86400000));
+  }
+
   return "";
+}
+
+// Build a YYYY-MM-DD string. If the year is missing, use the current year, or
+// the next year when that date has already passed (so "20 Aug" always resolves
+// to an upcoming date).
+function ymd(year, month, day) {
+  const mo = parseInt(month, 10);
+  const d = parseInt(day, 10);
+  if (!mo || mo > 12 || !d || d > 31) return "";
+  let y;
+  if (year) {
+    y = parseInt(year, 10);
+    if (y < 100) y += 2000;
+  } else {
+    const now = new Date();
+    y = now.getFullYear();
+    const candidate = new Date(y, mo - 1, d);
+    const todayMid = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    if (candidate < todayMid) y += 1;
+  }
+  return y + "-" + String(mo).padStart(2, "0") + "-" + String(d).padStart(2, "0");
 }
 
 function isoDay(d) {
