@@ -69,9 +69,13 @@ export default {
 // Mirrors the app's taskFromEvent shape so an emailed task renders identically.
 function taskFromEmail(subject, body) {
   const title = subject || "(no subject)";
-  const dueDate = parseDate(subject) || parseDate(body) || "";
+  // Date from the subject ONLY. Scanning the body caught number patterns in
+  // signatures (e.g. "Business Centre 1/2") as false dates.
+  const dueDate = parseDate(subject);
   const type = /\bvisit\b/i.test(title) ? "School Visit" : "Meeting";
-  const notesBody = (body || "").trim();
+  let notesBody = trimSignature(body);
+  // If the body just echoes the subject, don't repeat it in the notes.
+  if (notesBody.trim().toLowerCase() === title.trim().toLowerCase()) notesBody = "";
 
   return {
     id: "id-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
@@ -92,6 +96,27 @@ function taskFromEmail(subject, body) {
     completedDate: null,
     updatedAt: new Date().toISOString(),
   };
+}
+
+// Cut an email body at the start of its signature / footer, so the task notes
+// stay short. Truncates at the earliest of several common markers; if none are
+// present the body is returned whole (just trimmed).
+function trimSignature(text) {
+  if (!text) return "";
+  const markers = [
+    /^--\s*$/im, // standard signature delimiter
+    /^\s*(best wishes|kind regards|kindest regards|best regards|warm regards|regards|many thanks|thanks|thank you|cheers|yours (sincerely|faithfully))[,!.]?\s*$/im,
+    /^\s*sent from my /im, // mobile signature
+    /\*{5,}/, // confidentiality banner (rows of asterisks)
+    /\[cid:/i, // inline-image references
+    /this email (and files transmitted|is confidential)/i, // council/corporate footer
+  ];
+  let cut = text.length;
+  for (const re of markers) {
+    const m = text.match(re);
+    if (m && m.index < cut) cut = m.index;
+  }
+  return text.slice(0, cut).trim();
 }
 
 // Find a date in text -> "YYYY-MM-DD", or "" if none.
