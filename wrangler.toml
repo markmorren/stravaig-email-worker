@@ -15,8 +15,8 @@ binding = "DB"
 database_name = "stravaig"
 database_id = "ddd4e626-ca42-45fe-a372-4e23d0551855"
 
-# Set ALLOWED_SENDERS (and optionally FORWARD_TO) as dashboard vars/secrets, or
-# uncomment below if deploying from git. Do not commit real addresses if this
-# repo is ever made public.
-# [vars]
-# ALLOWED_SENDERS = "mmorren@me.com"
+# Deployed from git (Workers Builds), so the allowlist lives here as the single
+# source of truth - a plain dashboard var would get wiped on the next deploy.
+# These are email addresses, not credentials; keep this repo private.
+[vars]
+ALLOWED_SENDERS = "mmorren@me.com,mark.morren@ea.edin.sch.uk,9093770@ea.edin.sch.uk"
