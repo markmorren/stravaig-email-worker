@@ -26,6 +26,29 @@ export default {
       .map((s) => s.trim())
       .filter(Boolean);
 
+    // TEMP DEBUG: record what the Worker actually saw, so it can be read back
+    // from D1 (Worker live logs are not reachable from here). Remove once the
+    // pipeline is confirmed working.
+    try {
+      await env.DB.prepare(
+        "UPDATE state SET doc = json_set(doc, '$._emailDebug', json(?)) WHERE id = 1"
+      )
+        .bind(
+          JSON.stringify({
+            at: new Date().toISOString(),
+            rawFrom: message.from || null,
+            from: from,
+            allowedCount: allowed.length,
+            allowedSet: env.ALLOWED_SENDERS ? true : false,
+            matched: allowed.includes(from),
+            to: message.to || null,
+          })
+        )
+        .run();
+    } catch (e) {
+      /* debug write is best-effort */
+    }
+
     // If an allowlist is set, enforce it. If it is empty, refuse everything
     // rather than accept anonymous mail - failing closed is the safe default.
     if (!allowed.includes(from)) {
