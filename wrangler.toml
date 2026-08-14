@@ -1,0 +1,18 @@
+# Only needed if you ever deploy this Worker from git (Workers Builds) or the
+# CLI. The dashboard-paste route (see README) does not use this file - you set
+# the same D1 binding and vars in the dashboard instead.
+
+name = "stravaig-email"
+main = "worker.js"
+compatibility_date = "2026-08-11"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "stravaig"
+database_id = "ddd4e626-ca42-45fe-a372-4e23d0551855"
+
+# Set ALLOWED_SENDERS (and optionally FORWARD_TO) as dashboard vars/secrets, or
+# uncomment below if deploying from git. Do not commit real addresses if this
+# repo is ever made public.
+# [vars]
+# ALLOWED_SENDERS = "mmorren@me.com"
