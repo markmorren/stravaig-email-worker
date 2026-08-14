@@ -43,7 +43,18 @@ export default {
       body = ""; // a task with just the subject is still useful
     }
 
-    const task = taskFromEmail(subject, body);
+    // Prefer the AI interpreter (handles forwarded emails with no labels); fall
+    // back to the deterministic label/regex parser if AI is unbound or fails.
+    let task = null;
+    if (env.AI) {
+      try {
+        const fields = await aiExtract(env, subject, body, isoDay(new Date()));
+        if (fields) task = taskFromAI(subject, fields);
+      } catch (e) {
+        task = null;
+      }
+    }
+    if (!task) task = taskFromEmail(subject, body);
 
     try {
       await appendTask(env.DB, task);
@@ -102,6 +113,107 @@ function taskFromEmail(subject, body) {
     completedDate: null,
     updatedAt: new Date().toISOString(),
   };
+}
+
+// ---- AI interpretation (Cloudflare Workers AI) -----------------------------
+// Reads a whole email (often a forwarded one, with no labels) and extracts the
+// task fields. Returns a plain fields object, or null if anything goes wrong so
+// the caller can fall back to the deterministic parser.
+
+const AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast";
+
+const TASK_SCHEMA = {
+  type: "object",
+  properties: {
+    title: { type: "string" },
+    dueDate: { type: "string" },
+    startTime: { type: "string" },
+    endTime: { type: "string" },
+    taskType: { type: "string" },
+    schoolName: { type: "string" },
+    staffContact: { type: "string" },
+    learningCommunity: { type: "string" },
+    supportType: { type: "string" },
+    followUpItems: { type: "array", items: { type: "string" } },
+    notes: { type: "string" },
+  },
+  required: ["title", "dueDate", "startTime", "endTime", "taskType", "notes"],
+};
+
+async function aiExtract(env, subject, body, todayISO) {
+  const sys =
+    "You turn an email into ONE task for a personal work tracker used by a school-improvement officer. " +
+    "The email is often one they received and forwarded, so read the underlying content and IGNORE " +
+    "forwarding headers, quoted reply chains, email signatures and confidentiality footers. Fill these fields:\n" +
+    "- title: a short task title (a few words).\n" +
+    "- dueDate: the date the task/meeting happens as YYYY-MM-DD. Today is " + todayISO +
+    "; resolve relative dates (e.g. 'next Tuesday', 'tomorrow') against today. If there is no clear date, use \"\". Never invent one.\n" +
+    "- startTime / endTime: 24-hour HH:MM if a time or range is stated, otherwise \"\".\n" +
+    "- taskType: \"School Visit\" if it is a visit to a school, else \"Meeting\" (or a short better label if obvious).\n" +
+    "- schoolName, staffContact (a person's name), learningCommunity, supportType: only if clearly present, else \"\".\n" +
+    "- followUpItems: array of short action strings if any are implied, else [].\n" +
+    "- notes: one or two sentences on what the task is about. No signatures or legal footers.";
+  const user = "Subject: " + (subject || "(none)") + "\n\nBody:\n" + (body || "(empty)");
+
+  const out = await env.AI.run(AI_MODEL, {
+    messages: [
+      { role: "system", content: sys },
+      { role: "user", content: user },
+    ],
+    response_format: { type: "json_schema", json_schema: TASK_SCHEMA },
+    temperature: 0,
+    max_tokens: 512,
+  });
+
+  let data = out && out.response;
+  if (typeof data === "string") {
+    try { data = JSON.parse(data); } catch (e) { return null; }
+  }
+  return data && typeof data === "object" && !Array.isArray(data) ? data : null;
+}
+
+// Build a task from the AI's fields, validating each so a stray value can't
+// produce a malformed task. Same shape as the calendar/regex paths.
+function taskFromAI(subject, d) {
+  const str = (v) => (v == null ? "" : String(v).trim());
+  const title = str(d.title) || str(subject) || "(no subject)";
+  const dueDate = /^\d{4}-\d{2}-\d{2}$/.test(str(d.dueDate)) ? str(d.dueDate) : "";
+  const startTime = normHM(d.startTime);
+  const endTime = normHM(d.endTime);
+  const followup = Array.isArray(d.followUpItems)
+    ? d.followUpItems.map(str).filter(Boolean).join("\n")
+    : str(d.followUpItems);
+  let notes = str(d.notes);
+  if (notes.toLowerCase() === title.toLowerCase()) notes = "";
+
+  return {
+    id: "id-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+    icsUid: "",
+    taskType: str(d.taskType) || "Meeting",
+    learningCommunity: str(d.learningCommunity),
+    schoolName: str(d.schoolName),
+    staffContact: str(d.staffContact),
+    supportType: str(d.supportType),
+    dueDate: dueDate,
+    startTime: startTime,
+    endTime: endTime,
+    notes: title + (notes ? "\n\n" + notes : "") + " (from email)",
+    followUpItems: followup,
+    followUpChecked: [],
+    completed: false,
+    status: "Not started",
+    completedDate: null,
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+// Normalise a time to "HH:MM" (24h), or "" if it isn't a valid time.
+function normHM(v) {
+  const m = String(v == null ? "" : v).match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return "";
+  const h = parseInt(m[1], 10);
+  if (h > 23 || parseInt(m[2], 10) > 59) return "";
+  return String(h).padStart(2, "0") + ":" + m[2];
 }
 
 // Read optional "Label: value" lines out of the body and map them to task

@@ -8,6 +8,14 @@ document the app reads, so the task appears on your next 30-second sync.
 
 ## How it behaves
 
+**Forward anything (AI):** forward an email you received and Cloudflare Workers AI
+reads it and works out the task itself - title, date (resolving "next Tuesday"
+against today), time, school, contact, and a short summary for the notes. It
+ignores forwarding headers, quoted replies, signatures and footers. No labels or
+special formatting needed. Requires the `[ai]` binding (below); if the AI call
+ever fails, it automatically falls back to the parser described next, so a task is
+always created.
+
 **Quick capture (no rules):** the **subject** becomes the task title, the **body**
 becomes the notes, and a date in the subject sets the due date. Signatures and
 confidentiality footers are trimmed off automatically. That is all you need for a
